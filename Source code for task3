@@ -1,0 +1,199 @@
+```zip
+doc-editor/
+├── server/
+│   ├── index.js
+│   └── package.json
+├── client/
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── index.js
+│   │   └── styles.css
+│   ├── index.html
+│   └── package.json
+```
+
+**server/index.js**
+```javascript
+const http = require('http');
+const express = require('express');
+const ShareDB = require('sharedb');
+const WebSocket = require('ws');
+const WebSocketJSONStream = require('@teamwork/websocket-json-stream');
+const MongoDB = require('sharedb-mongo');
+const cors = require('cors');
+
+const app = express();
+const server = http.createServer(app);
+const backend = new ShareDB({
+  db: MongoDB('mongodb://localhost:27017/doc-editor')
+});
+const wss = new WebSocket.Server({ server });
+
+app.use(cors());
+app.use(express.static('public'));
+
+wss.on('connection', (ws) => {
+  const stream = new WebSocketJSONStream(ws);
+  backend.listen(stream);
+});
+
+server.listen(5000, () => {
+  console.log('Server running on port 5000');
+});
+```
+
+**server/package.json**
+```json
+{
+  "name": "doc-editor-server",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.17.1",
+    "sharedb": "^3.0.0",
+    "sharedb-mongo": "^1.0.0",
+    "ws": "^8.8.0",
+    "@teamwork/websocket-json-stream": "^2.0.0"
+  }
+}
+```
+
+**client/index.html**
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Collaborative Document Editor</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.18.9/babel.min.js"></script>
+</body>
+</html>
+```
+
+**client/src/App.jsx**
+```jsx
+import { useState, useEffect } from 'react';
+import { ReconnectingWebSocket } from './reconnecting-websocket';
+import * as richText from 'rich-text';
+import * as ShareDB from 'sharedb/lib/client';
+import './styles.css';
+
+ShareDB.types.register(richText.type);
+
+function App() {
+  const [content, setContent] = useState('');
+
+  useEffect(() => {
+    const socket = new ReconnectingWebSocket('ws://localhost:5000');
+    const connection = new ShareDB.Connection(socket);
+    const doc = connection.get('documents', 'doc1');
+
+    doc.subscribe((err) => {
+      if (err) throw err;
+      setContent(doc.data || '');
+      doc.on('op', () => {
+        setContent(doc.data);
+      });
+    });
+
+    return () => {
+      doc.destroy();
+      socket.close();
+    };
+  }, []);
+
+  const handleChange = (e) => {
+    const newContent = e.target.value;
+    setContent(newContent);
+    const doc = ShareDB.Connection.get('documents', 'doc1');
+    doc.submitOp([{ p: [], od: content, oi: newContent }]);
+  };
+
+  return (
+    <div className="editor-container">
+      <h1>Collaborative Document Editor</h1>
+      <textarea
+        value={content}
+        onChange={handleChange}
+        placeholder="Start typing..."
+      />
+    </div>
+  );
+}
+
+export default App;
+```
+
+**client/src/reconnecting-websocket.js**
+```javascript
+export class ReconnectingWebSocket {
+  constructor(url) {
+    this.url = url;
+    this.ws = new WebSocket(url);
+    this.setup();
+  }
+
+  setup() {
+    this.ws.onopen = () => console.log('WebSocket connected');
+    this.ws.onclose = () => setTimeout(() => this.reconnect(), 1000);
+    this.ws.onerror = (err) => console.error('WebSocket error:', err);
+  }
+
+  reconnect() {
+    this.ws = new WebSocket(this.url);
+    this.setup();
+  }
+
+  close() {
+    this.ws.close();
+  }
+}
+```
+
+**client/src/styles.css**
+```css
+.editor-container {
+  max-width: 800px;
+  margin: 20px auto;
+  padding: 20px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+}
+textarea {
+  width: 100%;
+  height: 400px;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 16px;
+}
+```
+
+**client/package.json**
+```json
+{
+  "name": "doc-editor-client",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "vite"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "sharedb": "^3.0.0",
+    "rich-text": "^4.1.0"
+  },
+  "devDependencies": {
+    "vite": "^4.0.0"
+  }
+}
+```
